@@ -86,6 +86,17 @@ internal fun RunDebugPanel(
         ) {
             Text("◇  Start Debugging")
         }
+        if (runtime == "Rust") {
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = actions.exportApk,
+                enabled = !building && !sessionActive,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = EditorTab, contentColor = Foreground),
+            ) {
+                Text("▣  Export APK")
+            }
+        }
         if (sessionVisible) {
             Spacer(Modifier.height(16.dp))
             DebugSectionTitle("SESSION")

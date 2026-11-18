@@ -99,6 +99,7 @@ internal data class RunDebugActions(
     val compilePico: () -> Unit,
     val run: () -> Unit,
     val debug: () -> Unit,
+    val exportApk: () -> Unit,
     val stop: () -> Unit,
     val snapshot: DebugSessionSnapshot,
     val selectFrame: (Int) -> Unit,

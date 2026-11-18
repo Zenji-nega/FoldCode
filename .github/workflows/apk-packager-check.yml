@@ -12,6 +12,7 @@ on:
     paths:
       - "app/src/main/java/dev/foldcode/ide/apk/**"
       - "app/src/test/java/dev/foldcode/ide/NativeApkPackagerTest.kt"
+      - "app/src/test/java/dev/foldcode/ide/RustApkExportTest.kt"
       - ".github/workflows/apk-packager-check.yml"
 
 permissions:
@@ -62,7 +63,8 @@ jobs:
           FOLDCODE_APK_TEST_OUT: ${{ runner.temp }}/apk-sample
         run: |
           ./gradlew --no-daemon testDebugUnitTest \
-            --tests 'dev.foldcode.ide.NativeApkPackagerTest'
+            --tests 'dev.foldcode.ide.NativeApkPackagerTest' \
+            --tests 'dev.foldcode.ide.RustApkExportTest'
           test -s "$FOLDCODE_APK_TEST_OUT/sample.apk"
 
       - name: Verify sample APK with apksigner

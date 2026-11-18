@@ -921,6 +921,50 @@ internal class WorkspaceBuildController(
         }, "FoldCode-LLDB-launch").start()
     }
 
+    /**
+     * Packages the project's `aarch64-linux-android` cdylib into a signed APK under
+     * `dist/`. It reports a clear message when that library has not been built.
+     */
+    fun exportApk() {
+        if (building || cleaningPicoBuild) return
+        focusManager.clearFocus(force = true)
+        terminalBeforeEditing = null
+        terminalVisible = true
+        building = true
+        buildOutput = "Exporting APK…"
+        terminal = "Exporting APK…"
+        Thread({
+            val projectDirectory = gitEngine.projectDirectoryFile(projectKey)
+            val message = runCatching {
+                gitEngine.saveProject(projectKey, rustSourcesForSave(projectDirectory), folders)
+                exportRustApk(projectDirectory)
+            }.getOrElse { error -> "APK export failed: ${error.message}" }
+            postToMainThread {
+                building = false
+                terminal = message
+                buildOutput = message
+                projectTree = gitEngine.projectTree(projectKey)
+            }
+        }, "FoldCode-APK-export").start()
+    }
+
+    private fun exportRustApk(projectDirectory: File): String {
+        val cargoToml = File(projectDirectory, "Cargo.toml").takeIf { it.isFile }?.readText()
+        val library = RustApkExport.findLibrary(projectDirectory, RustApkExport.crateName(cargoToml))
+            ?: return RustApkExport.missingLibraryMessage()
+        val spec = RustApkExport.specFor(cargoToml, library)
+        val identity = ApkSigningIdentity.loadOrCreate(File(context.filesDir, "apk-signing.p12"))
+        val output = NativeApkPackager.export(
+            spec,
+            library,
+            identity,
+            RustApkExport.outputFile(projectDirectory, spec),
+        )
+        return "APK exported: ${output.absolutePath}\n" +
+            "Package ${spec.packageName} · version ${spec.versionName}\n" +
+            "Open the file from a file manager to install it."
+    }
+
     fun stopCompile() {
         if (!building) return
         val managedSession = managedTerminalSessionId

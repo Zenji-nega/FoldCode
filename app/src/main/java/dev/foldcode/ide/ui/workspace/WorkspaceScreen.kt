@@ -1122,6 +1122,7 @@ internal fun IdeWorkspace() {
         compilePico = { runCurrentProject(forcePicoBuild = true) },
         run = { runCurrentProject() },
         debug = ::startDebugging,
+        exportApk = buildController::exportApk,
         stop = ::stopCurrentOperation,
         snapshot = debugSnapshot,
         selectFrame = debugController::selectFrame,
