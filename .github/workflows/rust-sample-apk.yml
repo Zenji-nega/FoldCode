@@ -7,6 +7,14 @@ name: Rust sample APK
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - rust-ide-improvements
+    paths:
+      - "docs/samples/rust-native-activity/**"
+      - "app/src/main/java/dev/foldcode/ide/apk/**"
+      - "app/src/test/java/dev/foldcode/ide/RealRustLibraryApkTest.kt"
+      - ".github/workflows/rust-sample-apk.yml"
 
 permissions:
   contents: write
