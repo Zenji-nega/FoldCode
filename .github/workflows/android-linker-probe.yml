@@ -1,0 +1,87 @@
+name: Android linker probe
+
+# Checks that a Rust cdylib for aarch64-linux-android links with plain rust-lld
+# and a small staged NDK sysroot, i.e. without the NDK's clang. That is the
+# situation on the phone, where only rust-lld from the Rust extension exists.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - rust-ide-improvements
+    paths:
+      - "tools/stage-android-sysroot.sh"
+      - ".github/workflows/android-linker-probe.yml"
+      - "docs/samples/rust-native-activity/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-linker-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: Link with rust-lld only
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NDK_VERSION: 27.2.12479018
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install NDK
+        shell: bash
+        run: |
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          sdkmanager="$sdk_root/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "$sdkmanager" ]]; then
+            sdkmanager=$(find "$sdk_root/cmdline-tools" \
+              -type f -path '*/bin/sdkmanager' -perm -111 -print | sort -V | tail -n 1)
+          fi
+          set +o pipefail
+          yes | "$sdkmanager" --licenses >/dev/null
+          set -o pipefail
+          "$sdkmanager" "ndk;${NDK_VERSION}"
+
+      - name: Install Rust with the Android target
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-linux-android
+          rustc --version
+
+      - name: Stage the minimal Android sysroot
+        shell: bash
+        run: |
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          tools/stage-android-sysroot.sh "$sdk_root/ndk/${NDK_VERSION}" "$RUNNER_TEMP/android-sysroot" 26
+
+      - name: Link the sample with rust-lld and no NDK clang
+        shell: bash
+        run: |
+          set -x
+          sysroot_rust=$(rustc --print sysroot)
+          lld="$sysroot_rust/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld"
+          test -x "$lld"
+          dir="$RUNNER_TEMP/android-sysroot"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$lld"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="\
+            -C linker-flavor=ld.lld \
+            -C link-arg=-L$dir \
+            -C link-arg=$dir/crtbegin_so.o \
+            -C link-arg=$dir/crtend_so.o \
+            -C link-arg=$dir/libunwind.a \
+            -C link-arg=$dir/libclang_rt.builtins-aarch64-android.a \
+            -C link-arg=--no-undefined"
+          # The NDK's clang is deliberately kept off the path for this build.
+          cd docs/samples/rust-native-activity
+          cargo build --release --target aarch64-linux-android --verbose 2>&1 | tail -n 60
+          lib=target/aarch64-linux-android/release/libhello_rust.so
+          test -s "$lib"
+          file "$lib"
+          readelf -d "$lib" | grep -E 'NEEDED|SONAME'
+          readelf -Ws --dyn-syms "$lib" | grep -E 'ANativeActivity_onCreate' 
