@@ -157,7 +157,7 @@ internal class RustPicoCompilerEngine(private val context: Context) {
             output = output,
             onProgress = onProgress,
         ) { arguments, consumeOutput ->
-            runTool(project, "cargo", arguments, cargoTargetDirectory, consumeOutput, android = true)
+            runTool(project, "cargo", arguments, cargoTargetDirectory, android = true, output = consumeOutput)
         }
         if (!ready) {
             return RustAndroidBuildResult(false, output.toString().trimEnd().ifBlank { "Could not prepare Cargo dependencies" })
@@ -168,10 +168,10 @@ internal class RustPicoCompilerEngine(private val context: Context) {
             if (!debug) add("--release")
             addAll(listOf("--target", target, "--message-format=short", "-j1"))
         }
-        val built = runTool(project, "cargo", cargoArguments, cargoTargetDirectory, { line ->
+        val built = runTool(project, "cargo", cargoArguments, cargoTargetDirectory, android = true) { line ->
             output.appendLine(line)
             onProgress(line)
-        }, android = true)
+        }
         if (!built) {
             return RustAndroidBuildResult(
                 false,
@@ -354,8 +354,8 @@ internal class RustPicoCompilerEngine(private val context: Context) {
         tool: String,
         arguments: List<String>,
         cargoTargetDirectory: File,
-        output: (String) -> Unit,
         android: Boolean = false,
+        output: (String) -> Unit,
     ): Boolean {
         if (cancelled.get()) return false
         val runtime = File(context.filesDir, "rust-runtime")
