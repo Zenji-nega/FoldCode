@@ -90,8 +90,10 @@ jobs:
         shell: bash
         run: |
           base=$(ls "$RUNNER_TEMP"/base/foldcode-rust-*.fcex | head -n 1)
-          python3 tools/assemble-rust-android-extension.py "$base" "$RUNNER_TEMP/android-sysroot" \
-            "$RUNNER_TEMP/out/$(basename "$base" .fcex)-android.fcex"
+          # foldcode-rust-1.0.0-4.fcex -> foldcode-rust-1.0.0-5.fcex (the manifest build number goes up by one too)
+          name=$(basename "$base" .fcex)
+          out="$RUNNER_TEMP/out/${name%-*}-$(( ${name##*-} + 1 )).fcex"
+          python3 tools/assemble-rust-android-extension.py "$base" "$RUNNER_TEMP/android-sysroot" "$out"
           python3 tools/verify-extension-notices.py "$RUNNER_TEMP"/out/*.fcex
           ls -l "$RUNNER_TEMP/out"
           unzip -p "$RUNNER_TEMP"/out/*.fcex manifest.json

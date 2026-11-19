@@ -10,18 +10,17 @@ internal object RustApkExport {
     private val NAME = Regex("""(?m)^\s*name\s*=\s*"([^"]+)"""")
     private val VERSION = Regex("""(?m)^\s*version\s*=\s*"([^"]+)"""")
 
-    /** Cargo's output for an Android build: `target/aarch64-linux-android/<profile>/lib<crate>.so`. */
-    fun findLibrary(projectDirectory: File, crateName: String? = null): File? {
+    /**
+     * Cargo's output for an Android build: `<cargo target dir>/aarch64-linux-android/<profile>/lib<crate>.so`.
+     * FoldCode keeps Cargo's target directory in app-private storage, outside the project.
+     */
+    fun findLibrary(cargoTargetDirectory: File, crateName: String?, debug: Boolean): File? {
         val expected = crateName?.let { "lib${it.replace('-', '_')}.so" }
-        for (profile in listOf("release", "debug")) {
-            val directory = File(projectDirectory, "target/$ANDROID_TARGET/$profile")
-            val candidates = directory.listFiles { file ->
-                file.isFile && file.name.startsWith("lib") && file.name.endsWith(".so")
-            }?.sortedBy { it.name }.orEmpty()
-            if (candidates.isEmpty()) continue
-            return candidates.firstOrNull { it.name == expected } ?: candidates.first()
-        }
-        return null
+        val directory = File(cargoTargetDirectory, "$ANDROID_TARGET/${if (debug) "debug" else "release"}")
+        val candidates = directory.listFiles { file ->
+            file.isFile && file.name.startsWith("lib") && file.name.endsWith(".so")
+        }?.sortedBy { it.name }.orEmpty()
+        return candidates.firstOrNull { it.name == expected } ?: candidates.firstOrNull()
     }
 
     fun crateName(cargoToml: String?): String? = packageSection(cargoToml)?.let {
@@ -48,10 +47,13 @@ internal object RustApkExport {
         File(projectDirectory, "dist/${spec.packageName.substringAfterLast('.')}.apk")
 
     fun missingLibraryMessage(): String =
-        "No Android library was found in target/$ANDROID_TARGET.\n" +
-            "Export needs a cdylib built for $ANDROID_TARGET " +
-            "(crate-type = [\"cdylib\"] in Cargo.toml, built with --target $ANDROID_TARGET).\n" +
-            "The Rust extension may not include that target yet."
+        "Cargo finished, but no Android library (lib<name>.so) was produced.\n" +
+            "Add a [lib] section with crate-type = [\"cdylib\"] to Cargo.toml, " +
+            "and export an android_main entry point (for example with the android-activity crate)."
+
+    fun missingTargetMessage(): String =
+        "The installed Rust extension cannot build for Android ($ANDROID_TARGET).\n" +
+            "Install a Rust extension package that includes the Android target (version 1.0.0+5 or newer)."
 
     internal fun packageIdentifier(crateName: String): String {
         val cleaned = crateName.lowercase().map { if (it in 'a'..'z' || it in '0'..'9') it else '_' }

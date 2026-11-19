@@ -131,7 +131,7 @@ def main() -> None:
         base_version = manifest["version"]
         build = int(base_version.split("+")[1]) if "+" in base_version else 0
         manifest["version"] = f"{base_version.split('+')[0]}+{build + 1}"
-        manifest["description"] = manifest["description"].rstrip(".") + " and Android ARM64 (APK export) targets."
+        manifest["description"] = manifest["description"].rstrip() + " Includes the aarch64-linux-android target for APK export."
         provides = manifest.setdefault("provides", [])
         if f"target:{TARGET}" not in provides:
             provides.append(f"target:{TARGET}")

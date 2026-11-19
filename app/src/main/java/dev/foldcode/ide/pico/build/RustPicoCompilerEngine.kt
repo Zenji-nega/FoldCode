@@ -7,6 +7,12 @@ import java.io.InputStreamReader
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
+internal data class RustAndroidBuildResult(
+    val succeeded: Boolean,
+    val output: String,
+    val library: File? = null,
+)
+
 internal class RustPicoCompilerEngine(private val context: Context) {
     private val cancelled = AtomicBoolean(false)
     private val activeProcess = AtomicReference<Process?>(null)
@@ -114,6 +120,70 @@ internal class RustPicoCompilerEngine(private val context: Context) {
         output.appendLine("Build succeeded")
         output.append("UF2: ${uf2.absolutePath}")
         return PicoBuildResult(true, output.toString(), uf2)
+    }
+
+    /**
+     * Builds the project's cdylib for Android ARM64 and returns the produced `lib<name>.so`.
+     * Linking uses the extension's own rust-lld and a small bundled NDK sysroot, so no
+     * Android SDK or NDK is needed on the phone.
+     */
+    fun buildAndroidLibrary(
+        project: File,
+        debug: Boolean = false,
+        onProgress: (String) -> Unit = {},
+    ): RustAndroidBuildResult {
+        cancelled.set(false)
+        val manager = FoldCodeExtensionManager(context)
+        if (!manager.isRustInstalled()) return RustAndroidBuildResult(false, "Install the Rust extension first")
+        runCatching { ensureRustRuntimeInstalled(context) }.onFailure {
+            return RustAndroidBuildResult(false, "Rust runtime installation failed: ${it.message}")
+        }
+        val runtime = File(context.filesDir, "rust-runtime")
+        val target = RustApkExport.ANDROID_TARGET
+        if (!File(runtime, "toolchain/lib/rustlib/$target/lib").isDirectory ||
+            !File(runtime, "toolchain/android-sysroot/libc.so").isFile
+        ) {
+            return RustAndroidBuildResult(false, RustApkExport.missingTargetMessage())
+        }
+        val manifest = File(project, "Cargo.toml")
+        if (!manifest.isFile) return RustAndroidBuildResult(false, "Cargo.toml is missing")
+
+        val output = StringBuilder()
+        val cargoTargetDirectory = cargoTargetDirectory(project).apply { mkdirs() }
+        val ready = prepareRustCargoCompatibility(
+            project = project,
+            target = target,
+            cargoTargetDirectory = cargoTargetDirectory,
+            output = output,
+            onProgress = onProgress,
+        ) { arguments, consumeOutput ->
+            runTool(project, "cargo", arguments, cargoTargetDirectory, consumeOutput, android = true)
+        }
+        if (!ready) {
+            return RustAndroidBuildResult(false, output.toString().trimEnd().ifBlank { "Could not prepare Cargo dependencies" })
+        }
+        onProgress("Starting Cargo build for $target…")
+        val cargoArguments = buildList {
+            add("build")
+            if (!debug) add("--release")
+            addAll(listOf("--target", target, "--message-format=short", "-j1"))
+        }
+        val built = runTool(project, "cargo", cargoArguments, cargoTargetDirectory, { line ->
+            output.appendLine(line)
+            onProgress(line)
+        }, android = true)
+        if (!built) {
+            return RustAndroidBuildResult(
+                false,
+                if (cancelled.get()) "Rust build cancelled" else output.toString().trimEnd().ifBlank { "Cargo build failed" },
+            )
+        }
+        val library = RustApkExport.findLibrary(
+            cargoTargetDirectory,
+            RustApkExport.crateName(manifest.readText()),
+            debug,
+        ) ?: return RustAndroidBuildResult(false, output.appendLine().append(RustApkExport.missingLibraryMessage()).toString())
+        return RustAndroidBuildResult(true, output.toString().trimEnd(), library)
     }
 
     /** Builds and runs an ordinary host Rust Cargo project inside the extension runtime. */
@@ -285,6 +355,7 @@ internal class RustPicoCompilerEngine(private val context: Context) {
         arguments: List<String>,
         cargoTargetDirectory: File,
         output: (String) -> Unit,
+        android: Boolean = false,
     ): Boolean {
         if (cancelled.get()) return false
         val runtime = File(context.filesDir, "rust-runtime")
@@ -298,6 +369,7 @@ internal class RustPicoCompilerEngine(private val context: Context) {
                 .apply {
                     configureRustEnvironment(environment(), project, runtime, cargoTargetDirectory)
                     environment()["FOLDCODE_RUST_TOOL"] = tool
+                    if (android) configureRustAndroidEnvironment(environment())
                     pidSession.configure(environment())
                 }
                 .start()
@@ -319,6 +391,26 @@ internal class RustPicoCompilerEngine(private val context: Context) {
             activeProcess.compareAndSet(process, null)
             pidSession.close()
         }
+    }
+
+    /**
+     * Links Android cdylibs with the extension's rust-lld directly (no C compiler driver)
+     * against the NDK files bundled in the extension. Applies only to the Android target;
+     * host build scripts and procedural macros keep using the glibc linker.
+     */
+    private fun configureRustAndroidEnvironment(environment: MutableMap<String, String>) {
+        val sysroot = "/opt/rust/android-sysroot"
+        environment["CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER"] =
+            "/opt/rust/lib/rustlib/aarch64-unknown-linux-gnu/bin/rust-lld"
+        environment["CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS"] = listOf(
+            "-C", "linker-flavor=ld.lld",
+            "-C", "link-arg=-L$sysroot",
+            "-C", "link-arg=$sysroot/crtbegin_so.o",
+            "-C", "link-arg=$sysroot/crtend_so.o",
+            "-C", "link-arg=$sysroot/libunwind.a",
+            "-C", "link-arg=$sysroot/libclang_rt.builtins-aarch64-android.a",
+            "-C", "link-arg=--no-undefined",
+        ).joinToString(" ")
     }
 
     private fun configureRustEnvironment(

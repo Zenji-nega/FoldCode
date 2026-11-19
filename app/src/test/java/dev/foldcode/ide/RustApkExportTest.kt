@@ -3,7 +3,6 @@ package dev.foldcode.ide
 import java.io.File
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -48,26 +47,27 @@ class RustApkExportTest {
     }
 
     @Test
-    fun libraryIsFoundInTheAndroidTargetDirectory() {
-        val project = Files.createTempDirectory("foldcode-apk-export").toFile()
+    fun libraryIsFoundInTheCargoTargetDirectory() {
+        val targetDirectory = Files.createTempDirectory("foldcode-apk-export").toFile()
         try {
-            assertNull(RustApkExport.findLibrary(project))
-            val release = File(project, "target/aarch64-linux-android/release").apply { mkdirs() }
+            assertNull(RustApkExport.findLibrary(targetDirectory, null, debug = false))
+            val release = File(targetDirectory, "aarch64-linux-android/release").apply { mkdirs() }
             File(release, "libhelper.so").writeBytes(ByteArray(1))
             File(release, "libmy_game.so").writeBytes(ByteArray(1))
             File(release, "deps").mkdirs()
             File(release, "deps/libignored.so").writeBytes(ByteArray(1))
 
-            assertEquals("libmy_game.so", RustApkExport.findLibrary(project, "my-game")?.name)
-            assertEquals("libhelper.so", RustApkExport.findLibrary(project)?.name)
+            assertEquals("libmy_game.so", RustApkExport.findLibrary(targetDirectory, "my-game", debug = false)?.name)
+            assertEquals("libhelper.so", RustApkExport.findLibrary(targetDirectory, null, debug = false)?.name)
+            // Profiles are not mixed: a release library is never used for a debug export.
+            assertNull(RustApkExport.findLibrary(targetDirectory, "my-game", debug = true))
 
-            // A glibc build in the host target directory must not be picked up.
-            val host = File(project, "target/release").apply { mkdirs() }
+            // A glibc build for the host target must not be picked up.
+            val host = File(targetDirectory, "release").apply { mkdirs() }
             File(host, "libhost.so").writeBytes(ByteArray(1))
-            assertNotNull(RustApkExport.findLibrary(project))
-            assertTrue(RustApkExport.findLibrary(project)!!.path.contains("aarch64-linux-android"))
+            assertTrue(RustApkExport.findLibrary(targetDirectory, null, debug = false)!!.path.contains("aarch64-linux-android"))
         } finally {
-            project.deleteRecursively()
+            targetDirectory.deleteRecursively()
         }
     }
 
@@ -75,6 +75,7 @@ class RustApkExportTest {
     fun outputGoesToTheProjectDistFolder() {
         val spec = RustApkExport.specFor(cargo, File("/p/libmy_game.so"))
         assertEquals(File("/proj/dist/my_game.apk"), RustApkExport.outputFile(File("/proj"), spec))
-        assertTrue(RustApkExport.missingLibraryMessage().contains("aarch64-linux-android"))
+        assertTrue(RustApkExport.missingTargetMessage().contains("aarch64-linux-android"))
+        assertTrue(RustApkExport.missingLibraryMessage().contains("cdylib"))
     }
 }

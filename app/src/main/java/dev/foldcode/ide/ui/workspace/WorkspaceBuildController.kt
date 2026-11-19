@@ -922,8 +922,8 @@ internal class WorkspaceBuildController(
     }
 
     /**
-     * Packages the project's `aarch64-linux-android` cdylib into a signed APK under
-     * `dist/`. It reports a clear message when that library has not been built.
+     * Builds the project's cdylib for Android ARM64 with the Rust extension, then packages it
+     * into a signed APK under `dist/`.
      */
     fun exportApk() {
         if (building || cleaningPicoBuild) return
@@ -931,13 +931,21 @@ internal class WorkspaceBuildController(
         terminalBeforeEditing = null
         terminalVisible = true
         building = true
+        val log = StringBuilder("Building Rust library for Android…\n")
         buildOutput = "Exporting APK…"
-        terminal = "Exporting APK…"
+        terminal = log.toString()
+        fun show(text: String) = postToMainThread {
+            terminal = text
+            buildOutput = text
+        }
         Thread({
             val projectDirectory = gitEngine.projectDirectoryFile(projectKey)
             val message = runCatching {
                 gitEngine.saveProject(projectKey, rustSourcesForSave(projectDirectory), folders)
-                exportRustApk(projectDirectory)
+                exportRustApk(projectDirectory) { line ->
+                    log.appendLine(line)
+                    show(log.toString())
+                }
             }.getOrElse { error -> "APK export failed: ${error.message}" }
             postToMainThread {
                 building = false
@@ -948,10 +956,12 @@ internal class WorkspaceBuildController(
         }, "FoldCode-APK-export").start()
     }
 
-    private fun exportRustApk(projectDirectory: File): String {
+    private fun exportRustApk(projectDirectory: File, onProgress: (String) -> Unit): String {
+        val build = rustPicoCompiler.buildAndroidLibrary(projectDirectory, debug = false, onProgress = onProgress)
+        val library = build.library
+        if (!build.succeeded || library == null) return build.output
+        onProgress("Packaging APK…")
         val cargoToml = File(projectDirectory, "Cargo.toml").takeIf { it.isFile }?.readText()
-        val library = RustApkExport.findLibrary(projectDirectory, RustApkExport.crateName(cargoToml))
-            ?: return RustApkExport.missingLibraryMessage()
         val spec = RustApkExport.specFor(cargoToml, library)
         val identity = ApkSigningIdentity.loadOrCreate(File(context.filesDir, "apk-signing.p12"))
         val output = NativeApkPackager.export(
