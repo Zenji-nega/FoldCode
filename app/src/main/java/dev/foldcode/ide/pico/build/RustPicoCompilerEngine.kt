@@ -157,7 +157,7 @@ internal class RustPicoCompilerEngine(private val context: Context) {
             output = output,
             onProgress = onProgress,
         ) { arguments, consumeOutput ->
-            runTool(project, "cargo", arguments, cargoTargetDirectory, android = true, output = consumeOutput)
+            runAndroidTool(project, "cargo", arguments, cargoTargetDirectory, consumeOutput)
         }
         if (!ready) {
             return RustAndroidBuildResult(false, output.toString().trimEnd().ifBlank { "Could not prepare Cargo dependencies" })
@@ -168,7 +168,7 @@ internal class RustPicoCompilerEngine(private val context: Context) {
             if (!debug) add("--release")
             addAll(listOf("--target", target, "--message-format=short", "-j1"))
         }
-        val built = runTool(project, "cargo", cargoArguments, cargoTargetDirectory, android = true) { line ->
+        val built = runAndroidTool(project, "cargo", cargoArguments, cargoTargetDirectory) { line ->
             output.appendLine(line)
             onProgress(line)
         }
@@ -354,7 +354,24 @@ internal class RustPicoCompilerEngine(private val context: Context) {
         tool: String,
         arguments: List<String>,
         cargoTargetDirectory: File,
-        android: Boolean = false,
+        output: (String) -> Unit,
+    ): Boolean = runToolInternal(project, tool, arguments, cargoTargetDirectory, android = false, output = output)
+
+    /** Same as [runTool], with the linker settings for the Android target added. */
+    private fun runAndroidTool(
+        project: File,
+        tool: String,
+        arguments: List<String>,
+        cargoTargetDirectory: File,
+        output: (String) -> Unit,
+    ): Boolean = runToolInternal(project, tool, arguments, cargoTargetDirectory, android = true, output = output)
+
+    private fun runToolInternal(
+        project: File,
+        tool: String,
+        arguments: List<String>,
+        cargoTargetDirectory: File,
+        android: Boolean,
         output: (String) -> Unit,
     ): Boolean {
         if (cancelled.get()) return false
