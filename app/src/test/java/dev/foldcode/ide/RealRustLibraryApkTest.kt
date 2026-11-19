@@ -1,7 +1,9 @@
 package dev.foldcode.ide
 
 import java.io.File
-import org.junit.Assert.assertTrue
+import java.util.zip.ZipFile
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Test
 
 /**
@@ -22,6 +24,12 @@ class RealRustLibraryApkTest {
         val spec = RustApkExport.specFor(cargoToml, library)
         val identity = ApkSigningIdentity.create("FoldCode CI")
         val output = NativeApkPackager.export(spec, library, identity, File(outputPath))
-        assertTrue(output.length() > library.length())
+        // The zip deflates the library, so the APK can be smaller than it; compare
+        // the stored library with the original instead of comparing sizes.
+        ZipFile(output).use { zip ->
+            val entry = zip.getEntry("lib/arm64-v8a/lib${spec.libraryName}.so")
+            assertNotNull("The APK has no native library entry", entry)
+            assertArrayEquals(library.readBytes(), zip.getInputStream(entry).readBytes())
+        }
     }
 }
