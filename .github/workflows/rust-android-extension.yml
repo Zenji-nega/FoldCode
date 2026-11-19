@@ -1,0 +1,119 @@
+name: Rust extension with Android target
+
+# Extends the published FoldCode Rust extension with the aarch64-linux-android
+# target (rust-std plus a few NDK link files) and publishes the result as an
+# installable .fcex. Install it from FoldCode's extension screen to enable
+# Export APK for Rust projects.
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_repo:
+        description: "Repository that publishes the base Rust .fcex"
+        default: "FifiLeih/FoldCode"
+        required: false
+  push:
+    branches:
+      - rust-ide-improvements
+    paths:
+      - "tools/assemble-rust-android-extension.py"
+      - "tools/stage-android-sysroot.sh"
+      - ".github/workflows/rust-android-extension.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rust-android-extension-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  assemble:
+    name: Assemble extension package
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      NDK_VERSION: 27.2.12479018
+      BASE_REPO: ${{ inputs.base_repo || 'FifiLeih/FoldCode' }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install NDK
+        shell: bash
+        run: |
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          sdkmanager="$sdk_root/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "$sdkmanager" ]]; then
+            sdkmanager=$(find "$sdk_root/cmdline-tools" \
+              -type f -path '*/bin/sdkmanager' -perm -111 -print | sort -V | tail -n 1)
+          fi
+          set +o pipefail
+          yes | "$sdkmanager" --licenses >/dev/null
+          set -o pipefail
+          "$sdkmanager" "ndk;${NDK_VERSION}"
+
+      - name: Stage the Android link files
+        shell: bash
+        run: |
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          tools/stage-android-sysroot.sh "$sdk_root/ndk/${NDK_VERSION}" "$RUNNER_TEMP/android-sysroot" 26
+
+      - name: Download the base Rust extension
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/base"
+          echo "Releases of $BASE_REPO that carry a Rust extension:"
+          gh release list --repo "$BASE_REPO" --limit 50 --json tagName,isPrerelease --jq '.[].tagName' | while read -r tag; do
+            names=$(gh release view "$tag" --repo "$BASE_REPO" --json assets --jq '.assets[].name' | grep -i -E 'rust.*\.fcex$' || true)
+            [[ -n "$names" ]] && echo "  $tag: $names"
+          done
+          tag=$(gh release list --repo "$BASE_REPO" --limit 50 --json tagName --jq '.[].tagName' | while read -r tag; do
+            if gh release view "$tag" --repo "$BASE_REPO" --json assets --jq '.assets[].name' | grep -qi -E '^foldcode-rust-.*\.fcex$'; then
+              echo "$tag"; break
+            fi
+          done)
+          if [[ -z "$tag" ]]; then
+            echo "No release of $BASE_REPO has a foldcode-rust-*.fcex asset. All assets:" >&2
+            gh release list --repo "$BASE_REPO" --limit 50 --json tagName --jq '.[].tagName' | while read -r t; do
+              echo "  $t:"; gh release view "$t" --repo "$BASE_REPO" --json assets --jq '.assets[].name' | sed 's/^/    /'
+            done >&2
+            exit 1
+          fi
+          echo "Using release $tag"
+          gh release download "$tag" --repo "$BASE_REPO" --pattern 'foldcode-rust-*.fcex' --dir "$RUNNER_TEMP/base"
+          ls -l "$RUNNER_TEMP/base"
+
+      - name: Assemble the extension with the Android target
+        shell: bash
+        run: |
+          base=$(ls "$RUNNER_TEMP"/base/foldcode-rust-*.fcex | head -n 1)
+          python3 tools/assemble-rust-android-extension.py "$base" "$RUNNER_TEMP/android-sysroot" \
+            "$RUNNER_TEMP/out/$(basename "$base" .fcex)-android.fcex"
+          python3 tools/verify-extension-notices.py "$RUNNER_TEMP"/out/*.fcex
+          ls -l "$RUNNER_TEMP/out"
+          unzip -p "$RUNNER_TEMP"/out/*.fcex manifest.json
+
+      - name: Check the payload contents
+        shell: bash
+        run: |
+          pkg=$(ls "$RUNNER_TEMP"/out/*.fcex | head -n 1)
+          unzip -p "$pkg" payload/rust-runtime-arm64.zip > "$RUNNER_TEMP/payload.zip"
+          unzip -l "$RUNNER_TEMP/payload.zip" | grep -E "rustlib/aarch64-linux-android/lib/libstd-|android-sysroot/(libc.so|crtbegin_so.o|libunwind.a)" | head
+          unzip -l "$RUNNER_TEMP/payload.zip" | grep -c "rustlib/aarch64-linux-android/lib/"
+
+      - name: Publish package as pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="rust-android-extension"
+          notes="Rust extension with the aarch64-linux-android target for Export APK (${GITHUB_SHA}). Install it from FoldCode's extension screen."
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --prerelease --title "Rust extension with Android target" --notes "$notes"
+          else
+            gh release edit "$tag" --notes "$notes"
+          fi
+          for f in "$RUNNER_TEMP"/out/*.fcex; do gh release upload "$tag" "$f" --clobber; done
