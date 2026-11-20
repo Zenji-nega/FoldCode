@@ -157,7 +157,9 @@ internal class RustPicoCompilerEngine(private val context: Context) {
             output = output,
             onProgress = onProgress,
         ) { arguments, consumeOutput ->
-            runAndroidTool(project, "cargo", arguments, cargoTargetDirectory, consumeOutput)
+            // An APK project's dependencies change as the user edits Cargo.toml (for example
+            // adding android-activity), so an older Cargo.lock must be allowed to update.
+            runAndroidTool(project, "cargo", arguments.filter { it != "--locked" }, cargoTargetDirectory, consumeOutput)
         }
         if (!ready) {
             return RustAndroidBuildResult(false, output.toString().trimEnd().ifBlank { "Could not prepare Cargo dependencies" })
